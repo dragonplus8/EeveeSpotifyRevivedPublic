@@ -2,6 +2,7 @@ import Orion
 import EeveeSpotifyC
 import UIKit
 import Foundation
+import ObjectiveC.runtime
 
 func writeDebugLog(_ message: String) {
     // Log to system console
@@ -241,23 +242,59 @@ struct EeveeSpotify: Tweak {
         // For 9.1.x, activate premium patching and lyrics
         if EeveeSpotify.hookTarget == .v91 {
             
-            // Premium patching
+            // Premium patching (guarded)
             if UserDefaults.patchType.isPatching {
-                BasePremiumPatchingGroup().activate()
+                if let hub = NSClassFromString("HUBViewModelBuilderImplementation"),
+                   class_getInstanceMethod(hub, Selector(("addJSONDictionary:"))) != nil {
+                    BasePremiumPatchingGroup().activate()
+                } else {
+                    writeDebugLog("[INIT] Skipped BasePremiumPatchingGroup (missing HUBViewModelBuilderImplementation/addJSONDictionary:)")
+                }
             }
             
             let lyricsEnabled = UserDefaults.lyricsSource.isReplacingLyrics
             
+            // Lyrics hooks (guarded)
             if lyricsEnabled {
-                BaseLyricsGroup().activate()
-                V91LyricsGroup().activate()
+                let fullscreenOK: Bool = {
+                    // For 9.1.x, targetName resolves to Lyrics_FullscreenElementPageImpl.FullscreenElementViewController
+                    if let cls = NSClassFromString("Lyrics_FullscreenElementPageImpl.FullscreenElementViewController") {
+                        return class_getInstanceMethod(cls, #selector(UIViewController.viewDidLoad)) != nil
+                    }
+                    return false
+                }()
 
-            } else {
+                let npvOK: Bool = {
+                    if let cls = NSClassFromString("NowPlaying_ScrollImpl.NPVScrollViewController") {
+                        return class_getInstanceMethod(cls, #selector(UIViewController.viewWillAppear(_:))) != nil
+                            && class_getInstanceMethod(cls, #selector(UIViewController.viewWillDisappear(_:))) != nil
+                    }
+                    return false
+                }()
+
+                if fullscreenOK {
+                    BaseLyricsGroup().activate()
+                } else {
+                    writeDebugLog("[INIT] Skipped BaseLyricsGroup (fullscreen VC missing)")
+                }
+
+                if npvOK {
+                    V91LyricsGroup().activate()
+                } else {
+                    writeDebugLog("[INIT] Skipped V91LyricsGroup (NPVScrollViewController missing)")
+                }
 
             }
             
-            // Settings integration
-            UniversalSettingsIntegrationGroup().activate()
+            // Settings integration (guarded)
+            if let cls = NSClassFromString("ProfileSettingsSection"),
+               class_getInstanceMethod(cls, Selector(("numberOfRows"))) != nil,
+               class_getInstanceMethod(cls, Selector(("didSelectRow:"))) != nil,
+               class_getInstanceMethod(cls, Selector(("cellForRow:"))) != nil {
+                UniversalSettingsIntegrationGroup().activate()
+            } else {
+                writeDebugLog("[INIT] Skipped UniversalSettingsIntegrationGroup (ProfileSettingsSection API mismatch)")
+            }
             // Also activate the banner for 9.1.x to ensure visibility if menu is missing
             // V91SettingsIntegrationGroup().activate()
             
